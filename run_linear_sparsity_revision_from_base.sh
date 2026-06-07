@@ -14,6 +14,8 @@ Optional:
   OUTPUT_JSON=$OUTPUT_ROOT/all_sparsity_results.json
   MODEL_KIND=hf
   LOCAL_ONLY=1
+  CHECKPOINT_DIAGNOSE=1
+  LOG_DIR=$OUTPUT_ROOT/logs
   DRY_RUN=1
 
 This writes a decoder_pruning_full_matrix JSON with 20 planned rows:
@@ -42,6 +44,8 @@ SPARSITY_GPU_IDS="${SPARSITY_GPU_IDS:-0,1,2,3,4,5,6,7}"
 TRAINING_DATASET="${TRAINING_DATASET:-data/scenic/SCENIC_full_training_dataset.json}"
 CONTRASTIVE_TRAINING_DATASET="${CONTRASTIVE_TRAINING_DATASET:-data/scenic/SCENIC_full_anchor_positive_negative.json}"
 BENCHMARK_DATASET="${BENCHMARK_DATASET:-data/benchmarks/iot_instruction_benchmark_200.json}"
+LOG_DIR="${LOG_DIR:-$OUTPUT_ROOT/logs}"
+CHECKPOINT_DIAGNOSE="${CHECKPOINT_DIAGNOSE:-1}"
 if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
   PYTHON_BIN="$CONDA_PREFIX/bin/python"
 else
@@ -54,10 +58,32 @@ export CUDA_VISIBLE_DEVICES
 export NPROC_PER_NODE
 export SPARSITY_GPU_IDS
 export DECODER_ONLY_MODEL_KIND="$MODEL_KIND"
+export DECODER_ONLY_LOG_DIR="$LOG_DIR"
+export DECODER_ONLY_VERBOSE_COMMANDS="${DECODER_ONLY_VERBOSE_COMMANDS:-1}"
 if [[ "$LOCAL_ONLY" == "1" ]]; then
   export HF_HUB_OFFLINE=1
   export TRANSFORMERS_OFFLINE=1
 fi
+
+if [[ "$CHECKPOINT_DIAGNOSE" == "1" ]]; then
+  mkdir -p "$LOG_DIR"
+  diagnose_log="$LOG_DIR/checkpoint_preflight.log"
+  echo "Running checkpoint preflight..."
+  echo "Log: $diagnose_log"
+  set +e
+  "$PYTHON_BIN" -m decoder_only.diagnose "$INPUT_CHECKPOINT" --model-kind "$MODEL_KIND" --local-only "$LOCAL_ONLY" >"$diagnose_log" 2>&1
+  diagnose_status=$?
+  set -e
+  cat "$diagnose_log"
+  if [[ "$diagnose_status" -ne 0 ]]; then
+    echo "Checkpoint preflight failed. Fix the checkpoint folder before running the matrix." >&2
+    exit "$diagnose_status"
+  fi
+fi
+
+echo "Model loader kind: $MODEL_KIND"
+echo "Local-only Hugging Face loading: $LOCAL_ONLY"
+echo "Logs: $LOG_DIR"
 
 args=(
   -m decoder_only.full_matrix

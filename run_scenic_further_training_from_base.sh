@@ -23,6 +23,8 @@ Useful overrides:
   MIXED_PRECISION=bf16
   MODEL_KIND=hf          # auto, hf, or custom
   LOCAL_ONLY=1
+  CHECKPOINT_DIAGNOSE=1
+  LOG_DIR=$OUTPUT_ROOT/logs
   DRY_RUN=1
 USAGE
 }
@@ -58,6 +60,8 @@ MAX_SOURCE_LENGTH="${MAX_SOURCE_LENGTH:-256}"
 CONTRASTIVE_LOSS_WEIGHT="${CONTRASTIVE_LOSS_WEIGHT:-0.1}"
 CONTRASTIVE_MARGIN="${CONTRASTIVE_MARGIN:-0.5}"
 NEGATIVE_FIELD="${NEGATIVE_FIELD:-negative}"
+LOG_DIR="${LOG_DIR:-$OUTPUT_ROOT/logs}"
+CHECKPOINT_DIAGNOSE="${CHECKPOINT_DIAGNOSE:-1}"
 if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
   PYTHON_BIN="$CONDA_PREFIX/bin/python"
 else
@@ -82,11 +86,32 @@ require_path() {
 }
 
 run_python_module() {
+  local stage_name="$1"
+  shift
+  mkdir -p "$LOG_DIR"
+  local log_file="$LOG_DIR/${stage_name}.log"
+  local command=()
   if [[ "$NPROC_PER_NODE" == "1" ]]; then
-    "$PYTHON_BIN" -m decoder_only.train "$@"
+    command=("$PYTHON_BIN" -m decoder_only.train "$@")
   else
-    "$PYTHON_BIN" -m torch.distributed.run --nproc_per_node="$NPROC_PER_NODE" -m decoder_only.train "$@"
+    command=("$PYTHON_BIN" -m torch.distributed.run --nproc_per_node="$NPROC_PER_NODE" -m decoder_only.train "$@")
   fi
+
+  echo "Command:"
+  print_command "${command[@]}"
+  echo "Log: $log_file"
+  set +e
+  "${command[@]}" >"$log_file" 2>&1
+  local status=$?
+  set -e
+  if [[ "$status" -ne 0 ]]; then
+    echo "Stage failed: $stage_name" >&2
+    echo "Exit code: $status" >&2
+    echo "Last 120 log lines from $log_file:" >&2
+    tail -n 120 "$log_file" >&2 || true
+    exit "$status"
+  fi
+  echo "Stage completed: $stage_name"
 }
 
 print_command() {
@@ -106,6 +131,22 @@ print_training_command() {
 require_path "$BASE_MODEL"
 require_path "$CONTRASTIVE_DATASET"
 require_path "$REGULAR_DATASET"
+
+if [[ "$CHECKPOINT_DIAGNOSE" == "1" ]]; then
+  mkdir -p "$LOG_DIR"
+  diagnose_log="$LOG_DIR/checkpoint_preflight.log"
+  echo "Running checkpoint preflight..."
+  echo "Log: $diagnose_log"
+  set +e
+  "$PYTHON_BIN" -m decoder_only.diagnose "$BASE_MODEL" --model-kind "$MODEL_KIND" --local-only "$LOCAL_ONLY" >"$diagnose_log" 2>&1
+  diagnose_status=$?
+  set -e
+  cat "$diagnose_log"
+  if [[ "$diagnose_status" -ne 0 ]]; then
+    echo "Checkpoint preflight failed. Fix the checkpoint folder before training." >&2
+    exit "$diagnose_status"
+  fi
+fi
 
 if [[ "$REGULAR_START" != "base" && "$REGULAR_START" != "contrastive" ]]; then
   echo "REGULAR_START must be either 'base' or 'contrastive'." >&2
@@ -159,6 +200,7 @@ echo "Regular SFT output: $REGULAR_OUTPUT/checkpoint-final"
 echo "Regular SFT starts from: $REGULAR_START"
 echo "Model loader kind: $MODEL_KIND"
 echo "Local-only Hugging Face loading: $LOCAL_ONLY"
+echo "Logs: $LOG_DIR"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run; commands that would run:"
@@ -168,14 +210,14 @@ if [[ "${DRY_RUN:-0}" == "1" ]]; then
 fi
 
 echo "Starting contrastive SCENIC training for $CONTRASTIVE_EPOCHS epochs..."
-run_python_module "${contrastive_args[@]}"
+run_python_module "contrastive_sft" "${contrastive_args[@]}"
 
 if [[ "$REGULAR_START" == "contrastive" ]]; then
   require_path "$REGULAR_MODEL"
 fi
 
 echo "Starting regular SCENIC SFT for $REGULAR_EPOCHS epochs..."
-run_python_module "${regular_args[@]}"
+run_python_module "regular_sft" "${regular_args[@]}"
 
 echo "Done."
 echo "Contrastive checkpoint: $CONTRASTIVE_OUTPUT/checkpoint-final"

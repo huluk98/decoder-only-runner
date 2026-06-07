@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -374,7 +375,9 @@ def run_dense_training(args: argparse.Namespace, output_root: Path, report: dict
     for family, command in commands:
         row = find_row(report, family=family, method="dense")
         row["execution_command"] = command
-        result = run_command(command, env=env)
+        log_path = command_log_path(output_root, f"dense_{family}")
+        row["execution_log"] = str(log_path)
+        result = run_command(command, env=env, log_path=log_path)
         if result:
             row["error"] = result
             row["notes"] = append_note(row.get("notes"), "Dense SFT failed; row preserved with null metrics.")
@@ -399,7 +402,12 @@ def run_one_shot_row(args: argparse.Namespace, row: dict[str, Any], base_checkpo
         str(args.batch_size),
     ]
     row["execution_command"] = command
-    result = run_command(command, env=env)
+    log_path = command_log_path(
+        Path(args.output_root),
+        f"row_{row['row_id']:02d}_{row['family']}_{row['method']}_{slug_sparsity(float(row['pruning_target_sparsity']))}",
+    )
+    row["execution_log"] = str(log_path)
+    result = run_command(command, env=env, log_path=log_path)
     if result:
         row["error"] = result
         row["notes"] = append_note(row.get("notes"), "One-shot pruning failed; row preserved with null metrics.")
@@ -445,6 +453,11 @@ def run_progressive_rows(
             str(row.get("assigned_gpu_id")),
         ]
         row["execution_command"] = command
+        log_path = command_log_path(
+            Path(args.output_root),
+            f"row_{row['row_id']:02d}_{row['family']}_progressive_{slug_sparsity(float(row['pruning_target_sparsity']))}",
+        )
+        row["execution_log"] = str(log_path)
         try:
             processes.append((row, subprocess.Popen(command, env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)))
         except Exception as exc:
@@ -453,9 +466,12 @@ def run_progressive_rows(
 
     for row, process in processes:
         stdout, stderr = process.communicate()
+        if row.get("execution_log"):
+            write_command_log(Path(row["execution_log"]), row["execution_command"], process.returncode, stdout, stderr)
         row["stdout_tail"] = tail(stdout)
         row["stderr_tail"] = tail(stderr)
         if process.returncode != 0:
+            print_command_failure(row["execution_command"], process.returncode, stdout, stderr, Path(row["execution_log"]))
             row["error"] = f"command_failed_returncode_{process.returncode}: {tail(stderr) or tail(stdout)}"
             row["notes"] = append_note(row.get("notes"), "Progressive pruning failed; row preserved with null metrics.")
         else:
@@ -512,8 +528,10 @@ def run_evaluations(args: argparse.Namespace, row: dict[str, Any], checkpoint_pa
             "--predictions-output",
             str(predictions_path),
         ]
-        result = run_command(command, env=os.environ.copy())
+        log_path = Path(row["checkpoint_path"]) / "eval" / prefix / "evaluate.log"
+        result = run_command(command, env=os.environ.copy(), log_path=log_path)
         row[f"{prefix}_evaluation_command"] = command
+        row[f"{prefix}_evaluation_log"] = str(log_path)
         if result:
             row["notes"] = append_note(row.get("notes"), f"{prefix} evaluation failed; metrics left null.")
             row["error"] = row.get("error") or result
@@ -540,14 +558,62 @@ def apply_metric_summary(row: dict[str, Any], prefix: str, summary: dict[str, An
         row[f"benchmark_{label}_em5"] = block.get("em5")
 
 
-def run_command(command: list[str], env: dict[str, str]) -> str | None:
+def run_command(command: list[str], env: dict[str, str], log_path: Path | None = None) -> str | None:
+    verbose = os.environ.get("DECODER_ONLY_VERBOSE_COMMANDS", "1") not in {"0", "false", "False"}
+    if verbose:
+        print(f"Running: {shlex.join(command)}", flush=True)
+        if log_path is not None:
+            print(f"Log: {log_path}", flush=True)
     try:
         completed = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
     except Exception as exc:
         return str(exc)
+    if log_path is not None:
+        write_command_log(log_path, command, completed.returncode, completed.stdout, completed.stderr)
     if completed.returncode != 0:
+        print_command_failure(command, completed.returncode, completed.stdout, completed.stderr, log_path)
         return f"command_failed_returncode_{completed.returncode}: {tail(completed.stderr) or tail(completed.stdout)}"
     return None
+
+
+def command_log_path(output_root: Path, label: str) -> Path:
+    root = Path(os.environ.get("DECODER_ONLY_LOG_DIR", str(output_root / "logs"))).expanduser()
+    return root / f"{label}.log"
+
+
+def write_command_log(
+    log_path: Path,
+    command: list[str],
+    returncode: int,
+    stdout: str | None,
+    stderr: str | None,
+) -> None:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = [
+        f"$ {shlex.join(command)}",
+        f"returncode={returncode}",
+        "",
+        "===== STDOUT =====",
+        stdout or "",
+        "",
+        "===== STDERR =====",
+        stderr or "",
+    ]
+    log_path.write_text("\n".join(payload), encoding="utf-8")
+
+
+def print_command_failure(
+    command: list[str],
+    returncode: int,
+    stdout: str | None,
+    stderr: str | None,
+    log_path: Path | None,
+) -> None:
+    print(f"Command failed with return code {returncode}: {shlex.join(command)}", file=sys.stderr, flush=True)
+    if log_path is not None:
+        print(f"Full log: {log_path}", file=sys.stderr, flush=True)
+    print("Last command output:", file=sys.stderr, flush=True)
+    print(tail(stderr, chars=4000) or tail(stdout, chars=4000) or "(no output)", file=sys.stderr, flush=True)
 
 
 def write_report(report: dict[str, Any], output_json: Path) -> None:
@@ -606,7 +672,7 @@ def append_note(current: str | None, note: str) -> str:
     return f"{current} {note}"
 
 
-def tail(text: str | None, chars: int = 1000) -> str:
+def tail(text: str | None, chars: int = 4000) -> str:
     if not text:
         return ""
     return text[-chars:]

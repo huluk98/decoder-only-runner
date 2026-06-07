@@ -23,6 +23,7 @@ decoder-train = "decoder_only.train:main"
 decoder-prune = "decoder_only.prune:main"
 decoder-full-matrix = "decoder_only.full_matrix:main"
 decoder-evaluate = "decoder_only.evaluate:main"
+decoder-diagnose = "decoder_only.diagnose:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

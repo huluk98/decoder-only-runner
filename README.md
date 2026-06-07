@@ -24,6 +24,16 @@ MODEL_KIND=hf \
 bash run_linear_sparsity_revision_from_base.sh /PATH/TO/MY/DECODER_SLM_CHECKPOINT
 ```
 
+If a run fails, first check the preflight and stage logs:
+
+```bash
+decoder-diagnose /PATH/TO/MY/DECODER_SLM_CHECKPOINT --model-kind hf
+tail -n 120 outputs/scenic_further_training/logs/checkpoint_preflight.log
+tail -n 120 outputs/scenic_further_training/logs/contrastive_sft.log
+tail -n 120 outputs/scenic_further_training/logs/regular_sft.log
+tail -n 120 outputs/decoder_pruning_full_matrix/logs/dense_regular_sft.log
+```
+
 Small public-safe repository for continuing training and sampling from a trained decoder-only
 language model.
 
