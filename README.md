@@ -127,6 +127,25 @@ The final checkpoint is written to:
 outputs/my-decoder-slm-further-trained/checkpoint-final/
 ```
 
+## Generate Sparsity Results JSON
+
+To scan a local decoder SLM checkpoint and create a JSON file shaped like
+`all_sparsity_results-2.json`:
+
+```bash
+./generate_sparsity_results.sh checkpoints/my-decoder-slm all_sparsity_results.json
+```
+
+Optional labels can be supplied as environment variables:
+
+```bash
+MODEL_TRAINING=regular_sft RUN_LABEL=magnitude_0p5 TARGET_SPARSITY=0.5 \
+  ./generate_sparsity_results.sh checkpoints/my-decoder-slm all_sparsity_results.json
+```
+
+The script measures checkpoint sparsity only. Training and benchmark EM fields are emitted as
+`null` unless they are produced by a separate evaluation workflow.
+
 ## Run Generation
 
 ```bash
