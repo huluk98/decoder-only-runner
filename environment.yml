@@ -1,0 +1,14 @@
+name: decoder-only-runner
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pytorch
+  - pip:
+      - transformers>=4.41
+      - tokenizers>=0.19
+      - safetensors>=0.4
+      - accelerate>=0.31
+      - numpy>=1.26

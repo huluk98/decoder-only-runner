@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "decoder-only-runner"
+version = "0.1.0"
+description = "Runnable environment for trained decoder-only language models."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "torch>=2.2",
+  "transformers>=4.41",
+  "tokenizers>=0.19",
+  "safetensors>=0.4",
+  "accelerate>=0.31",
+  "numpy>=1.26",
+]
+
+[project.scripts]
+decoder-generate = "decoder_only.generate:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
