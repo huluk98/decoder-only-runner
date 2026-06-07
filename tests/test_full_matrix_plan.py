@@ -18,6 +18,9 @@ class Args:
     contrastive_sft_epochs = 5
     recovery_epochs_per_stage = 1
     final_recovery_epochs = 1
+    contrastive_loss_weight = 0.1
+    contrastive_margin = 0.5
+    negative_field = "negative"
 
 
 class FullMatrixPlanTest(unittest.TestCase):

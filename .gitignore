@@ -22,6 +22,11 @@ outputs/*
 data/*
 !data/.gitkeep
 !data/README.md
+!data/scenic/
+!data/scenic/SCENIC_full_training_dataset.json
+!data/scenic/SCENIC_full_anchor_positive_negative.json
+!data/benchmarks/
+!data/benchmarks/iot_instruction_benchmark_200.json
 *.pt
 *.pth
 *.ckpt

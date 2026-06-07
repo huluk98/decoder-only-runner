@@ -11,6 +11,10 @@ from torch.utils.data import Dataset
 TEXT_SUFFIXES = {".txt", ".text", ".md"}
 JSONL_SUFFIXES = {".jsonl", ".ndjson"}
 JSON_SUFFIXES = {".json"}
+PROMPT_FIELDS = ("prompt", "instruction", "question", "input", "anchor", "x")
+RESPONSE_FIELDS = ("response", "output", "answer", "completion", "target", "y")
+POSITIVE_FIELDS = ("positive", "pos", "x_positive", "x_plus", "chosen")
+NEGATIVE_FIELDS = ("negative", "neg", "x_negative", "x_minus", "rejected")
 
 
 def iter_data_files(paths: Iterable[str | Path]) -> list[Path]:
@@ -73,6 +77,39 @@ def load_text_records(
     return records
 
 
+def load_contrastive_records(
+    paths: Iterable[str | Path],
+    negative_field: str = "negative",
+) -> list[dict[str, str]]:
+    records: list[dict[str, str]] = []
+    for path in iter_data_files(paths):
+        suffix = path.suffix.lower()
+        if suffix not in JSONL_SUFFIXES | JSON_SUFFIXES:
+            raise ValueError(f"Contrastive data must be JSON or JSONL, got: {path}")
+        for index, payload in enumerate(_iter_json_payloads(path)):
+            if not isinstance(payload, dict):
+                raise ValueError(f"{path}:{index} must contain JSON objects.")
+            anchor = _clean_text(payload.get("anchor")) or _first_text(payload, PROMPT_FIELDS)
+            positive = _clean_text(payload.get("positive")) or _first_text(payload, POSITIVE_FIELDS)
+            negative = _clean_text(payload.get(negative_field)) or _first_text(payload, NEGATIVE_FIELDS)
+            response = _first_text(payload, RESPONSE_FIELDS)
+            if not anchor or not positive or not negative or not response:
+                raise ValueError(
+                    f"{path}:{index} needs anchor, positive, {negative_field}, and response fields."
+                )
+            records.append(
+                {
+                    "anchor": anchor,
+                    "positive": positive,
+                    "negative": negative,
+                    "response": response,
+                }
+            )
+    if not records:
+        raise ValueError("No contrastive records were loaded.")
+    return records
+
+
 def _load_json_records(
     path: Path,
     text_field: str,
@@ -92,6 +129,32 @@ def _load_json_records(
         for item in payload
         if (text := _record_to_text(item, text_field, prompt_field, completion_field)).strip()
     ]
+
+
+def _iter_json_payloads(path: Path) -> list[Any]:
+    suffix = path.suffix.lower()
+    if suffix in JSONL_SUFFIXES:
+        payloads: list[Any] = []
+        with path.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    payloads.append(json.loads(line))
+                except json.JSONDecodeError as exc:
+                    raise ValueError(f"Invalid JSON on {path}:{line_number}") from exc
+        return payloads
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "records", "examples", "items"):
+            if isinstance(payload.get(key), list):
+                return payload[key]
+        return [payload]
+    if isinstance(payload, list):
+        return payload
+    raise ValueError(f"{path} must contain a JSON object, JSON list, or JSONL records.")
 
 
 def _load_jsonl_records(
@@ -141,6 +204,18 @@ def _record_to_text(
         f"JSON record needs '{text_field}', prompt/response, or "
         f"'{prompt_field}'/'{completion_field}' fields."
     )
+
+
+def _clean_text(value: Any) -> str:
+    return "" if value is None else str(value).replace("\ufeff", "").strip()
+
+
+def _first_text(payload: dict[str, Any], fields: tuple[str, ...]) -> str:
+    for field in fields:
+        value = _clean_text(payload.get(field))
+        if value:
+            return value
+    return ""
 
 
 def encode_records(

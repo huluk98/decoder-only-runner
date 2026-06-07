@@ -71,6 +71,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--learning-rate", type=float, default=2e-5)
     parser.add_argument("--mixed-precision", default="bf16")
+    parser.add_argument("--max-source-length", type=int, default=256)
+    parser.add_argument("--contrastive-loss-weight", type=float, default=0.1)
+    parser.add_argument("--contrastive-margin", type=float, default=0.5)
+    parser.add_argument("--negative-field", default="negative")
     parser.add_argument("--dry-run", action="store_true", help="Write the 20-row plan without running training/pruning.")
     return parser
 
@@ -113,6 +117,9 @@ def build_initial_report(args: argparse.Namespace, output_root: Path) -> dict[st
             "sparsity_gpu_ids": args.sparsity_gpu_ids,
             "recovery_epochs_per_stage": args.recovery_epochs_per_stage,
             "final_recovery_epochs": args.final_recovery_epochs,
+            "contrastive_loss_weight": args.contrastive_loss_weight,
+            "contrastive_margin": args.contrastive_margin,
+            "contrastive_negative_field": args.negative_field,
             "datasets": {
                 "training_dataset": args.training_dataset,
                 "contrastive_training_dataset": args.contrastive_training_dataset,
@@ -306,6 +313,8 @@ def run_dense_training(args: argparse.Namespace, output_root: Path, report: dict
                 "decoder_only.train",
                 "--model-path",
                 args.input_checkpoint_path,
+                "--training-mode",
+                "sft",
                 "--train-data",
                 args.training_dataset,
                 "--output-dir",
@@ -333,7 +342,9 @@ def run_dense_training(args: argparse.Namespace, output_root: Path, report: dict
                 "-m",
                 "decoder_only.train",
                 "--model-path",
-                str(regular_output / "checkpoint-final"),
+                args.input_checkpoint_path,
+                "--training-mode",
+                "contrastive",
                 "--train-data",
                 args.contrastive_training_dataset,
                 "--output-dir",
@@ -348,6 +359,14 @@ def run_dense_training(args: argparse.Namespace, output_root: Path, report: dict
                 str(args.learning_rate),
                 "--mixed-precision",
                 args.mixed_precision,
+                "--max-source-length",
+                str(args.max_source_length),
+                "--contrastive-loss-weight",
+                str(args.contrastive_loss_weight),
+                "--contrastive-margin",
+                str(args.contrastive_margin),
+                "--negative-field",
+                args.negative_field,
                 "--gradient-checkpointing",
             ],
         ),

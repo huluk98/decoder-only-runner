@@ -75,7 +75,15 @@ If `vocab_size` is `256` and no tokenizer is provided, the runner uses a UTF-8 b
 
 ## Add Further-Training Data
 
-Put data under `data/`. Supported formats:
+The repo includes the final SCENIC artifacts needed for the decoder SLM runs:
+
+```text
+data/scenic/SCENIC_full_training_dataset.json
+data/scenic/SCENIC_full_anchor_positive_negative.json
+data/benchmarks/iot_instruction_benchmark_200.json
+```
+
+Supported additional formats:
 
 - `.txt`, `.md`, `.text`: entire file is used as training text.
 - `.jsonl`: each line can contain `text`, or `prompt` and `completion`.
@@ -85,6 +93,35 @@ Example:
 ```jsonl
 {"text": "A complete training example goes here."}
 {"prompt": "Question: ...\nAnswer:", "completion": " ..."}
+```
+
+## One-Command SCENIC Further Training
+
+Run both 5-epoch SCENIC training jobs from a base decoder checkpoint:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+NPROC_PER_NODE=8 \
+bash run_scenic_further_training_from_base.sh /PATH/TO/MY/BASE_DECODER_SLM
+```
+
+This writes:
+
+```text
+outputs/scenic_further_training/contrastive_sft_5epoch/checkpoint-final/
+outputs/scenic_further_training/regular_sft_5epoch/checkpoint-final/
+```
+
+Defaults:
+
+- contrastive triplet SFT: 5 epochs on `data/scenic/SCENIC_full_anchor_positive_negative.json`
+- regular SFT: 5 epochs on `data/scenic/SCENIC_full_training_dataset.json`
+- regular SFT starts from the base model. To chain regular SFT after contrastive SFT, set `REGULAR_START=contrastive`.
+
+Planner check without training:
+
+```bash
+DRY_RUN=1 bash run_scenic_further_training_from_base.sh /PATH/TO/MY/BASE_DECODER_SLM
 ```
 
 ## Continue Training
@@ -159,6 +196,9 @@ NPROC_PER_NODE=8 \
 SPARSITY_GPU_IDS=0,1,2,3,4,5,6,7 \
 bash run_linear_sparsity_revision_from_base.sh /PATH/TO/MY/DECODER_SLM_CHECKPOINT
 ```
+
+The script uses the bundled SCENIC regular, SCENIC contrastive, and IoT benchmark JSON files by
+default.
 
 Expected final JSON rows:
 

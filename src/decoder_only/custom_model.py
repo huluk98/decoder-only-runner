@@ -109,7 +109,8 @@ class DecoderOnlyTransformer(nn.Module):
         self,
         idx: torch.Tensor,
         targets: torch.Tensor | None = None,
-    ) -> tuple[torch.Tensor, torch.Tensor | None]:
+        return_hidden_states: bool = False,
+    ) -> tuple[torch.Tensor, torch.Tensor | None] | tuple[torch.Tensor, torch.Tensor | None, torch.Tensor]:
         device = idx.device
         batch_size, seq_len = idx.size()
         if seq_len > self.config.block_size:
@@ -129,6 +130,8 @@ class DecoderOnlyTransformer(nn.Module):
         loss = None
         if targets is not None:
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+        if return_hidden_states:
+            return logits, loss, x
         return logits, loss
 
     @torch.no_grad()
