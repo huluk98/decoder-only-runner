@@ -57,6 +57,39 @@ def load_custom_tokenizer(
     checkpoint_data: dict[str, Any] | None,
     vocab_size: int,
 ):
+    tokenizer_json = model_path / "tokenizer.json"
+    if tokenizer_json.exists():
+        try:
+            from transformers import PreTrainedTokenizerFast
+        except ImportError as exc:
+            raise RuntimeError(
+                "transformers is required to load tokenizer.json as a local fast tokenizer."
+            ) from exc
+
+        kwargs: dict[str, Any] = {"tokenizer_file": str(tokenizer_json)}
+        for filename in ("tokenizer_config.json", "special_tokens_map.json"):
+            path = model_path / filename
+            if path.exists():
+                value = json.loads(path.read_text(encoding="utf-8"))
+                if isinstance(value, dict):
+                    for key in (
+                        "pad_token",
+                        "unk_token",
+                        "bos_token",
+                        "eos_token",
+                        "sep_token",
+                        "cls_token",
+                        "mask_token",
+                        "additional_special_tokens",
+                        "model_max_length",
+                    ):
+                        if key in value:
+                            kwargs[key] = value[key]
+        tokenizer = PreTrainedTokenizerFast(**kwargs)
+        if tokenizer.pad_token_id is None and tokenizer.eos_token is not None:
+            tokenizer.pad_token = tokenizer.eos_token
+        return tokenizer
+
     vocab_path = model_path / "vocab.json"
     if vocab_path.exists():
         token_to_id = _token_to_id_from_json(json.loads(vocab_path.read_text()))

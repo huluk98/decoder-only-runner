@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import fields
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,14 @@ from decoder_only.custom_model import DecoderConfig, DecoderOnlyTransformer
 from decoder_only.tokenizers import load_custom_tokenizer
 
 
+CUSTOM_CHECKPOINT_FILES = (
+    "model.pt",
+    "checkpoint.pt",
+    "model.pth",
+    "checkpoint.pth",
+)
+
+
 def resolve_device(device: str | None = None) -> torch.device:
     if device:
         return torch.device(device)
@@ -19,6 +28,26 @@ def resolve_device(device: str | None = None) -> torch.device:
     if torch.cuda.is_available():
         return torch.device("cuda")
     return torch.device("cpu")
+
+
+def _custom_config_keys(model_path: Path) -> set[str]:
+    for filename in ("decoder_config.json", "config.json"):
+        config_path = model_path / filename
+        if config_path.exists():
+            try:
+                payload = json.loads(config_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                return set()
+            if isinstance(payload, dict):
+                return set(payload)
+    return set()
+
+
+def _looks_like_custom_model(model_path: Path) -> bool:
+    if any((model_path / name).exists() for name in CUSTOM_CHECKPOINT_FILES):
+        return True
+    required = {"vocab_size", "block_size", "n_layer", "n_head", "n_embd"}
+    return required.issubset(_custom_config_keys(model_path))
 
 
 def _looks_like_hf_model(model_path: Path) -> bool:
@@ -52,29 +81,49 @@ def _load_hf_model(model_path: Path, device: torch.device) -> tuple[str, Any, An
             "Install the environment from environment.yml or requirements.txt."
         ) from exc
 
-    tokenizer = AutoTokenizer.from_pretrained(
-        model_path,
-        local_files_only=True,
-        trust_remote_code=True,
-    )
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path,
-        local_files_only=True,
-        trust_remote_code=True,
-        torch_dtype="auto",
-    )
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_path,
+            local_files_only=True,
+            trust_remote_code=True,
+        )
+        model = AutoModelForCausalLM.from_pretrained(
+            model_path,
+            local_files_only=True,
+            trust_remote_code=True,
+            torch_dtype="auto",
+        )
+    except Exception as exc:
+        raise RuntimeError(
+            "The checkpoint was detected as a local Hugging Face causal LM, so Transformers "
+            "tried to instantiate the model class from config.json. If this is your custom "
+            "decoder-only checkpoint, set DECODER_ONLY_MODEL_KIND=custom or keep the custom "
+            "config fields vocab_size, block_size, n_layer, n_head, and n_embd in config.json."
+        ) from exc
     model.to(device)
     model.eval()
     return "hf", model, tokenizer
 
 
 def _find_custom_checkpoint(model_path: Path) -> Path:
-    for name in ("model.pt", "checkpoint.pt", "model.pth", "checkpoint.pth", "pytorch_model.bin"):
+    for name in (
+        "model.pt",
+        "checkpoint.pt",
+        "model.pth",
+        "checkpoint.pth",
+        "pytorch_model.bin",
+        "model.safetensors",
+        "checkpoint.safetensors",
+    ):
         candidate = model_path / name
         if candidate.exists():
             return candidate
 
-    candidates = sorted(model_path.glob("*.pt")) + sorted(model_path.glob("*.pth"))
+    candidates = (
+        sorted(model_path.glob("*.pt"))
+        + sorted(model_path.glob("*.pth"))
+        + sorted(model_path.glob("*.safetensors"))
+    )
     if candidates:
         return candidates[0]
 
@@ -153,6 +202,14 @@ def _normalize_state_dict_keys(state_dict: dict[str, torch.Tensor]) -> dict[str,
 
 
 def _load_checkpoint(checkpoint_path: Path) -> Any:
+    if checkpoint_path.suffix == ".safetensors":
+        try:
+            from safetensors.torch import load_file
+        except ImportError as exc:
+            raise RuntimeError(
+                "safetensors is required to load custom .safetensors checkpoints."
+            ) from exc
+        return load_file(str(checkpoint_path), device="cpu")
     try:
         return torch.load(checkpoint_path, map_location="cpu", weights_only=True)
     except TypeError:
@@ -188,7 +245,13 @@ def load_model_and_tokenizer(
         raise FileNotFoundError(f"Model path does not exist: {resolved_path}")
 
     torch_device = resolve_device(device)
-    if _looks_like_hf_model(resolved_path):
+    model_kind = os.environ.get("DECODER_ONLY_MODEL_KIND", "auto").strip().lower()
+    if model_kind not in {"auto", "custom", "hf"}:
+        raise ValueError("DECODER_ONLY_MODEL_KIND must be one of: auto, custom, hf")
+
+    if model_kind == "custom" or (model_kind == "auto" and _looks_like_custom_model(resolved_path)):
+        kind, model, tokenizer = _load_custom_model(resolved_path, torch_device)
+    elif model_kind == "hf" or _looks_like_hf_model(resolved_path):
         kind, model, tokenizer = _load_hf_model(resolved_path, torch_device)
     else:
         kind, model, tokenizer = _load_custom_model(resolved_path, torch_device)

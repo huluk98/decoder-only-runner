@@ -21,6 +21,7 @@ Useful overrides:
   GRADIENT_ACCUMULATION_STEPS=16
   LEARNING_RATE=2e-5
   MIXED_PRECISION=bf16
+  MODEL_KIND=custom      # auto, custom, or hf
   DRY_RUN=1
 USAGE
 }
@@ -56,10 +57,16 @@ MAX_SOURCE_LENGTH="${MAX_SOURCE_LENGTH:-256}"
 CONTRASTIVE_LOSS_WEIGHT="${CONTRASTIVE_LOSS_WEIGHT:-0.1}"
 CONTRASTIVE_MARGIN="${CONTRASTIVE_MARGIN:-0.5}"
 NEGATIVE_FIELD="${NEGATIVE_FIELD:-negative}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
+  PYTHON_BIN="$CONDA_PREFIX/bin/python"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python}"
+fi
+MODEL_KIND="${MODEL_KIND:-auto}"
 
 export CUDA_VISIBLE_DEVICES
 export NPROC_PER_NODE
+export DECODER_ONLY_MODEL_KIND="$MODEL_KIND"
 
 require_path() {
   if [[ ! -e "$1" ]]; then
@@ -144,6 +151,7 @@ echo "Base model: $BASE_MODEL"
 echo "Contrastive output: $CONTRASTIVE_OUTPUT/checkpoint-final"
 echo "Regular SFT output: $REGULAR_OUTPUT/checkpoint-final"
 echo "Regular SFT starts from: $REGULAR_START"
+echo "Model loader kind: $MODEL_KIND"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run; commands that would run:"

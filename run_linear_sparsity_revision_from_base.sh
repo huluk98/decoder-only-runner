@@ -12,6 +12,7 @@ Usage:
 Optional:
   OUTPUT_ROOT=outputs/decoder_pruning_full_matrix
   OUTPUT_JSON=$OUTPUT_ROOT/all_sparsity_results.json
+  MODEL_KIND=custom
   DRY_RUN=1
 
 This writes a decoder_pruning_full_matrix JSON with 20 planned rows:
@@ -40,11 +41,17 @@ SPARSITY_GPU_IDS="${SPARSITY_GPU_IDS:-0,1,2,3,4,5,6,7}"
 TRAINING_DATASET="${TRAINING_DATASET:-data/scenic/SCENIC_full_training_dataset.json}"
 CONTRASTIVE_TRAINING_DATASET="${CONTRASTIVE_TRAINING_DATASET:-data/scenic/SCENIC_full_anchor_positive_negative.json}"
 BENCHMARK_DATASET="${BENCHMARK_DATASET:-data/benchmarks/iot_instruction_benchmark_200.json}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
+  PYTHON_BIN="$CONDA_PREFIX/bin/python"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python}"
+fi
+MODEL_KIND="${MODEL_KIND:-auto}"
 
 export CUDA_VISIBLE_DEVICES
 export NPROC_PER_NODE
 export SPARSITY_GPU_IDS
+export DECODER_ONLY_MODEL_KIND="$MODEL_KIND"
 
 args=(
   -m decoder_only.full_matrix

@@ -21,7 +21,7 @@ Optional environment labels:
   SEED                  Seed value to include in JSON. Default: null
   PRUNE_OUTPUT_HEADS    Include lm_head/classifier/output heads when set to 1.
   REPORT_TYPE           Top-level report type. Default follows encoder-only JSON.
-  PYTHON_BIN            Python executable. Default: python3
+  PYTHON_BIN            Python executable. Default: python
 
 Examples:
   conda activate decoder-only-runner
@@ -44,7 +44,11 @@ fi
 
 MODEL_PATH="$1"
 OUTPUT_JSON="${2:-all_sparsity_results.json}"
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
+  PYTHON_BIN="$CONDA_PREFIX/bin/python"
+else
+  PYTHON_BIN="${PYTHON_BIN:-python}"
+fi
 
 "$PYTHON_BIN" - "$MODEL_PATH" "$OUTPUT_JSON" <<'PY'
 from __future__ import annotations
