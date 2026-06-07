@@ -10,6 +10,7 @@ from torch.utils.data import Dataset
 
 TEXT_SUFFIXES = {".txt", ".text", ".md"}
 JSONL_SUFFIXES = {".jsonl", ".ndjson"}
+JSON_SUFFIXES = {".json"}
 
 
 def iter_data_files(paths: Iterable[str | Path]) -> list[Path]:
@@ -17,7 +18,7 @@ def iter_data_files(paths: Iterable[str | Path]) -> list[Path]:
     for raw_path in paths:
         path = Path(raw_path).expanduser()
         if path.is_dir():
-            for suffix in sorted(TEXT_SUFFIXES | JSONL_SUFFIXES):
+            for suffix in sorted(TEXT_SUFFIXES | JSONL_SUFFIXES | JSON_SUFFIXES):
                 files.extend(sorted(path.rglob(f"*{suffix}")))
         elif path.is_file():
             files.append(path)
@@ -54,11 +55,43 @@ def load_text_records(
             )
             continue
 
+        if suffix in JSON_SUFFIXES:
+            records.extend(
+                _load_json_records(
+                    path,
+                    text_field=text_field,
+                    prompt_field=prompt_field,
+                    completion_field=completion_field,
+                )
+            )
+            continue
+
         raise ValueError(f"Unsupported data file type: {path}")
 
     if not records:
         raise ValueError("No non-empty training records were loaded.")
     return records
+
+
+def _load_json_records(
+    path: Path,
+    text_field: str,
+    prompt_field: str,
+    completion_field: str,
+) -> list[str]:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(payload, dict):
+        for key in ("data", "rows", "records", "examples"):
+            if isinstance(payload.get(key), list):
+                payload = payload[key]
+                break
+    if not isinstance(payload, list):
+        payload = [payload]
+    return [
+        text
+        for item in payload
+        if (text := _record_to_text(item, text_field, prompt_field, completion_field)).strip()
+    ]
 
 
 def _load_jsonl_records(
@@ -95,10 +128,18 @@ def _record_to_text(
         raise ValueError("JSONL records must be objects or strings.")
     if text_field in payload:
         return str(payload[text_field])
+    if "prompt" in payload and "response" in payload:
+        return str(payload.get("prompt", "")) + str(payload.get("response", ""))
     if prompt_field in payload or completion_field in payload:
         return str(payload.get(prompt_field, "")) + str(payload.get(completion_field, ""))
+    if "anchor" in payload and "response" in payload:
+        text = str(payload.get("anchor", "")) + str(payload.get("response", ""))
+        if payload.get("positive"):
+            text += "\n" + str(payload.get("positive", "")) + str(payload.get("response", ""))
+        return text
     raise ValueError(
-        f"JSONL record needs '{text_field}' or '{prompt_field}'/'{completion_field}' fields."
+        f"JSON record needs '{text_field}', prompt/response, or "
+        f"'{prompt_field}'/'{completion_field}' fields."
     )
 
 

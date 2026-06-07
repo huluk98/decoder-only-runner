@@ -148,6 +148,33 @@ The script measures checkpoint sparsity only. Training and benchmark EM fields a
 the encoder-only implementation: it measures prunable `nn.Linear` weights, excludes output heads by
 default, and records encoder-style `pruning_config` fields.
 
+## Run Full 20-Row Pruning Matrix
+
+To start from one decoder checkpoint, create dense SFT baselines, run the one-shot pruning matrix,
+run progressive magnitude pruning with recovery, and write the final JSON:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+NPROC_PER_NODE=8 \
+SPARSITY_GPU_IDS=0,1,2,3,4,5,6,7 \
+bash run_linear_sparsity_revision_from_base.sh /PATH/TO/MY/DECODER_SLM_CHECKPOINT
+```
+
+Expected final JSON rows:
+
+- dense baselines: 2
+- regular original one-shot: 7
+- contrastive original one-shot: 7
+- regular progressive magnitude: 2
+- contrastive progressive magnitude: 2
+- total JSON rows: 20
+
+For a planner/schema check without training or pruning:
+
+```bash
+DRY_RUN=1 bash run_linear_sparsity_revision_from_base.sh /PATH/TO/MY/DECODER_SLM_CHECKPOINT
+```
+
 ## Run Generation
 
 ```bash

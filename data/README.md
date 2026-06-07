@@ -6,6 +6,7 @@ Supported formats:
 
 - `.txt`, `.md`, `.text`: the whole file is treated as training text.
 - `.jsonl`: each line can contain a `text` field, or `prompt` and `completion` fields.
+- `.json`: list/object payloads with `text`, `prompt`/`response`, `prompt`/`completion`, or SCENIC-style `anchor`/`positive`/`response` fields.
 
 Example JSONL:
 
