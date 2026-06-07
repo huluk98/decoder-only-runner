@@ -1,5 +1,29 @@
 # Decoder-Only SLM Further Training
 
+## Run First
+
+Use these after activating the `decoder-only-runner` environment. For `Decoder-Chinese-SLM`
+checkpoints, keep `MODEL_KIND=hf`; loading is local/offline by default.
+
+Dual SCENIC further training only:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+NPROC_PER_NODE=8 \
+MODEL_KIND=hf \
+bash run_scenic_further_training_from_base.sh /PATH/TO/MY/BASE_DECODER_SLM
+```
+
+Full SCENIC training plus 20-row pruning matrix:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
+NPROC_PER_NODE=8 \
+SPARSITY_GPU_IDS=0,1,2,3,4,5,6,7 \
+MODEL_KIND=hf \
+bash run_linear_sparsity_revision_from_base.sh /PATH/TO/MY/DECODER_SLM_CHECKPOINT
+```
+
 Small public-safe repository for continuing training and sampling from a trained decoder-only
 language model.
 
