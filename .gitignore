@@ -17,6 +17,11 @@ dist/
 # Keep trained weights local unless you intentionally publish them elsewhere.
 checkpoints/*
 !checkpoints/.gitkeep
+outputs/*
+!outputs/.gitkeep
+data/*
+!data/.gitkeep
+!data/README.md
 *.pt
 *.pth
 *.ckpt

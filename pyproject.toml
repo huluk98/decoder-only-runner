@@ -19,6 +19,7 @@ dependencies = [
 
 [project.scripts]
 decoder-generate = "decoder_only.generate:main"
+decoder-train = "decoder_only.train:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
