@@ -5,7 +5,7 @@ channels:
 dependencies:
   - python=3.11
   - pip
-  - pytorch
+  - pytorch>=2.5
   - pip:
       - transformers>=4.41
       - tokenizers>=0.19
