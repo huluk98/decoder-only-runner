@@ -24,6 +24,7 @@ Useful overrides:
   MODEL_KIND=hf          # auto, hf, or custom
   LOCAL_ONLY=1
   CHECKPOINT_DIAGNOSE=1
+  CHECKPOINT_LOAD_MODEL=1
   LOG_DIR=$OUTPUT_ROOT/logs
   DRY_RUN=1
 USAGE
@@ -62,6 +63,7 @@ CONTRASTIVE_MARGIN="${CONTRASTIVE_MARGIN:-0.5}"
 NEGATIVE_FIELD="${NEGATIVE_FIELD:-negative}"
 LOG_DIR="${LOG_DIR:-$OUTPUT_ROOT/logs}"
 CHECKPOINT_DIAGNOSE="${CHECKPOINT_DIAGNOSE:-1}"
+CHECKPOINT_LOAD_MODEL="${CHECKPOINT_LOAD_MODEL:-1}"
 if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/python" ]]; then
   PYTHON_BIN="$CONDA_PREFIX/bin/python"
 else
@@ -138,7 +140,11 @@ if [[ "$CHECKPOINT_DIAGNOSE" == "1" ]]; then
   echo "Running checkpoint preflight..."
   echo "Log: $diagnose_log"
   set +e
-  "$PYTHON_BIN" -m decoder_only.diagnose "$BASE_MODEL" --model-kind "$MODEL_KIND" --local-only "$LOCAL_ONLY" >"$diagnose_log" 2>&1
+  diagnose_args=("$BASE_MODEL" --model-kind "$MODEL_KIND" --local-only "$LOCAL_ONLY")
+  if [[ "$CHECKPOINT_LOAD_MODEL" == "1" ]]; then
+    diagnose_args+=(--load-model)
+  fi
+  "$PYTHON_BIN" -m decoder_only.diagnose "${diagnose_args[@]}" >"$diagnose_log" 2>&1
   diagnose_status=$?
   set -e
   cat "$diagnose_log"

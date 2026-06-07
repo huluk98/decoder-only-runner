@@ -80,6 +80,7 @@ def main() -> None:
     print(f"  looks_like_custom: {looks_custom}")
 
     if model_kind == "hf" or (model_kind == "auto" and looks_hf and not looks_custom):
+        validate_hf_layout(model_path)
         diagnose_hf_tokenizer(model_path)
     elif model_kind == "custom" or looks_custom:
         print("\ncustom checkpoint layout selected.")
@@ -132,6 +133,39 @@ def diagnose_hf_tokenizer(model_path: Path) -> None:
     print(f"  pad: {tokenizer.pad_token!r} id={tokenizer.pad_token_id}")
     if tokenizer.pad_token_id is None:
         raise RuntimeError("Tokenizer has no pad token. Re-run the PreTrainedTokenizerFast repair snippet.")
+
+
+def validate_hf_layout(model_path: Path) -> None:
+    missing: list[str] = []
+    if not (model_path / "config.json").exists():
+        missing.append("config.json")
+    if not any((model_path / name).exists() for name in ("tokenizer.json", "tokenizer_config.json")):
+        missing.append("tokenizer.json or tokenizer_config.json")
+    if not has_hf_weights(model_path):
+        missing.append("model.safetensors/pytorch_model.bin or all files referenced by a weight index")
+    if missing:
+        raise RuntimeError(
+            "This does not look like a complete local Hugging Face checkpoint folder. Missing: "
+            + ", ".join(missing)
+            + ". Make sure you pass the folder that contains both tokenizer files and model weight files, "
+            "not just the tokenizer artifact folder."
+        )
+
+
+def has_hf_weights(model_path: Path) -> bool:
+    if (model_path / "model.safetensors").exists() or (model_path / "pytorch_model.bin").exists():
+        return True
+    for index_name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
+        index_path = model_path / index_name
+        if not index_path.exists():
+            continue
+        index = read_json(index_path)
+        weight_map = index.get("weight_map")
+        if not isinstance(weight_map, dict) or not weight_map:
+            return False
+        shard_names = {str(name) for name in weight_map.values()}
+        return all((model_path / name).exists() for name in shard_names)
+    return False
 
 
 if __name__ == "__main__":

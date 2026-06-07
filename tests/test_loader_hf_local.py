@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import torch
 
+from decoder_only.diagnose import validate_hf_layout
 from decoder_only.loader import load_model_and_tokenizer
 
 
@@ -58,6 +59,18 @@ class HfLocalLoaderTest(unittest.TestCase):
             load_model.assert_called_once()
             self.assertEqual(load_model.call_args.kwargs["local_files_only"], True)
             self.assertEqual(load_model.call_args.kwargs["trust_remote_code"], False)
+
+    def test_hf_layout_requires_model_weights(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_tmpdir:
+            tmpdir = Path(raw_tmpdir)
+            (tmpdir / "config.json").write_text(
+                json.dumps({"model_type": "llama", "vocab_size": 16}),
+                encoding="utf-8",
+            )
+            (tmpdir / "tokenizer.json").write_text("{}", encoding="utf-8")
+
+            with self.assertRaisesRegex(RuntimeError, "Missing: model.safetensors"):
+                validate_hf_layout(tmpdir)
 
 
 if __name__ == "__main__":

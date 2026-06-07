@@ -106,7 +106,8 @@ def _load_hf_model(model_path: Path, device: torch.device) -> tuple[str, Any, An
             "MODEL_KIND=auto and make sure config.json, model.safetensors/pytorch_model.bin, "
             "tokenizer.json, tokenizer_config.json, and special_tokens_map.json are all in the "
             "same local folder. If this is the older custom model.pt format instead, set "
-            "MODEL_KIND=custom."
+            "MODEL_KIND=custom. "
+            f"Underlying Transformers error: {type(exc).__name__}: {exc}"
         ) from exc
     if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None):
         tokenizer.pad_token = tokenizer.eos_token

@@ -34,6 +34,12 @@ tail -n 120 outputs/scenic_further_training/logs/regular_sft.log
 tail -n 120 outputs/decoder_pruning_full_matrix/logs/dense_regular_sft.log
 ```
 
+That checkpoint path must be the final/full model folder, not only the tokenizer folder. For
+`Decoder-Chinese-SLM`, it should contain `config.json`, `tokenizer.json`,
+`tokenizer_config.json`, `special_tokens_map.json`, and `model.safetensors` or
+`pytorch_model.bin` in the same directory. If CPU preflight loading is too slow, set
+`CHECKPOINT_LOAD_MODEL=0` after the folder layout has been confirmed.
+
 Small public-safe repository for continuing training and sampling from a trained decoder-only
 language model.
 
