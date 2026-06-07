@@ -11,19 +11,21 @@ Arguments:
   OUTPUT_JSON   Optional output file. Defaults to ./all_sparsity_results.json.
 
 Optional environment labels:
-  MODEL_TRAINING   Row label for training type. Default: decoder_slm
-  RUN_LABEL        Row label. Default: basename of MODEL_PATH
-  TARGET_SPARSITY  Desired sparsity value. Default: measured linear sparsity
-  PRUNING_MODE     Pruning mode label. Default: measured
-  PRUNING_METHOD   Pruning method label. Default: unknown
-  METHOD_LABEL     Method display label. Default: PRUNING_METHOD
-  SEED             Seed value to include in JSON. Default: null
-  INCLUDE_LM_HEAD  Count lm_head/output heads as linear weights when set to 1.
-  PYTHON_BIN       Python executable. Default: python3
+  MODEL_TRAINING        Row label for training type. Default: decoder_slm
+  RUN_LABEL             Row label. Default: basename of MODEL_PATH
+  RESULT_BLOCK          Result block label. Default: decoder_model_sparsity_scan
+  TARGET_SPARSITY       Desired sparsity value. Default: measured linear sparsity
+  PRUNING_MODE          Pruning mode label. Default: measured
+  PRUNING_METHOD        Pruning method label. Default: magnitude
+  METHOD_LABEL          Method display label. Default: PRUNING_METHOD
+  SEED                  Seed value to include in JSON. Default: null
+  PRUNE_OUTPUT_HEADS    Include lm_head/classifier/output heads when set to 1.
+  REPORT_TYPE           Top-level report type. Default follows encoder-only JSON.
+  PYTHON_BIN            Python executable. Default: python3
 
 Examples:
   conda activate decoder-only-runner
-  ./generate_sparsity_results.sh checkpoints/my-decoder-slm results.json
+  ./generate_sparsity_results.sh checkpoints/my-decoder-slm all_sparsity_results.json
 
   MODEL_TRAINING=regular_sft RUN_LABEL=magnitude_0p5 TARGET_SPARSITY=0.5 \
     ./generate_sparsity_results.sh /path/to/checkpoint /tmp/all_sparsity_results.json
@@ -49,7 +51,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,6 +58,7 @@ from typing import Any
 
 try:
     import torch
+    from torch import nn
 except ImportError as exc:
     raise SystemExit(
         "Could not import torch. Activate the project environment first, for example:\n"
@@ -71,6 +73,29 @@ if not MODEL_PATH.exists():
     raise SystemExit(f"Model path does not exist: {MODEL_PATH}")
 
 
+HEAD_PREFIXES = ("classifier", "lm_head", "qa_outputs", "score", "cls")
+HEAD_SUBSTRINGS = (
+    "response_classifier",
+    "response_projection",
+    "final_response_projection",
+    "final_projection",
+    "output_head",
+    "prediction_head",
+)
+EMBEDDING_NAME_PARTS = (
+    "embed",
+    "embedding",
+    "embeddings",
+    "wte",
+    "wpe",
+    "position",
+    "rotary",
+    "rope",
+    "tok_emb",
+    "token_embedding",
+)
+
+
 def env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name)
     if value is None or value == "":
@@ -78,26 +103,134 @@ def env(name: str, default: str | None = None) -> str | None:
     return value
 
 
-def parse_float_or_none(value: str | None) -> float | None:
+def env_bool(name: str, default: bool = False) -> bool:
+    value = env(name)
     if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "y", "on"}
+
+
+def as_float(value: Any) -> float | None:
+    if value is None or value == "":
         return None
     return float(value)
 
 
-def parse_seed(value: str | None) -> int | None:
-    if value is None:
+def as_int(value: Any) -> int | None:
+    if value is None or value == "":
         return None
     return int(value)
+
+
+def canonical_module_name(name: str) -> str:
+    for prefix in ("_orig_mod.", "module.", "model."):
+        while name.startswith(prefix):
+            name = name[len(prefix) :]
+    return name
+
+
+def is_output_head_module(name: str) -> bool:
+    normalized = canonical_module_name(name).lower()
+    parts = tuple(part for part in normalized.split(".") if part)
+    if parts and parts[0] in HEAD_PREFIXES:
+        return True
+    if parts and parts[-1] in HEAD_PREFIXES:
+        return True
+    return any(fragment in normalized for fragment in HEAD_SUBSTRINGS)
+
+
+def count_zeros(tensor: torch.Tensor) -> int:
+    return int((tensor.detach() == 0).sum().item())
+
+
+def parameter_sparsity(parameters: list[tuple[str, torch.Tensor]]) -> dict[str, int | float]:
+    numel = 0
+    zeros = 0
+    for _name, parameter in parameters:
+        tensor = parameter.detach()
+        numel += int(tensor.numel())
+        zeros += count_zeros(tensor)
+    return {
+        "numel": numel,
+        "zeros": zeros,
+        "sparsity": zeros / numel if numel else 0.0,
+    }
+
+
+def collect_prunable_linear_modules(
+    model: nn.Module,
+    prune_output_heads: bool,
+) -> list[tuple[str, nn.Linear]]:
+    modules: list[tuple[str, nn.Linear]] = []
+    for name, module in model.named_modules():
+        if not isinstance(module, nn.Linear):
+            continue
+        if not prune_output_heads and is_output_head_module(name):
+            continue
+        modules.append((canonical_module_name(name), module))
+    return modules
+
+
+def whole_model_sparsity(model: nn.Module) -> dict[str, int | float]:
+    return parameter_sparsity([(name, parameter) for name, parameter in model.named_parameters()])
+
+
+def current_linear_sparsity_summary_from_model(
+    model: nn.Module,
+    target_sparsity: float,
+    method: str,
+    prune_output_heads: bool,
+) -> dict[str, Any]:
+    modules = collect_prunable_linear_modules(model, prune_output_heads=prune_output_heads)
+    target_stats = parameter_sparsity([(f"{name}.weight", module.weight) for name, module in modules])
+    whole_stats = whole_model_sparsity(model)
+    return {
+        "prune_scope": "linear_weights",
+        "prune_method": method,
+        "target_sparsity": float(target_sparsity),
+        "prune_output_heads": bool(prune_output_heads),
+        "global_pruning": False,
+        "regrowth": False,
+        "targeted_linear_parameters": int(target_stats["numel"]),
+        "targeted_linear_zeros": int(target_stats["zeros"]),
+        "targeted_linear_sparsity_actual": float(target_stats["sparsity"]),
+        "whole_model_parameters": int(whole_stats["numel"]),
+        "whole_model_zeros": int(whole_stats["zeros"]),
+        "whole_model_sparsity_actual": float(whole_stats["sparsity"]),
+        "selected_linear_tensors": [
+            {
+                "name": name,
+                "shape": list(module.weight.shape),
+                "numel": int(module.weight.numel()),
+                "zeros": count_zeros(module.weight),
+                "sparsity": count_zeros(module.weight) / int(module.weight.numel())
+                if int(module.weight.numel())
+                else 0.0,
+            }
+            for name, module in modules
+        ],
+    }
+
+
+def load_model_for_measurement() -> nn.Module:
+    try:
+        from decoder_only.loader import load_model_and_tokenizer
+    except ImportError as exc:
+        raise RuntimeError("Could not import decoder_only.loader. Run `pip install -e .` first.") from exc
+
+    # A file checkpoint is measured through its parent directory when possible, because the
+    # decoder loader expects config/tokenizer files beside the weight file.
+    load_path = MODEL_PATH.parent if MODEL_PATH.is_file() else MODEL_PATH
+    _kind, model, _tokenizer, _device = load_model_and_tokenizer(load_path, device="cpu")
+    model.eval()
+    return model
 
 
 def load_safetensors(path: Path) -> dict[str, torch.Tensor]:
     try:
         from safetensors.torch import load_file
     except ImportError as exc:
-        raise SystemExit(
-            "safetensors is required for .safetensors checkpoints. "
-            "Install the project requirements first."
-        ) from exc
+        raise RuntimeError("safetensors is required for .safetensors checkpoints.") from exc
     return load_file(path, device="cpu")
 
 
@@ -131,8 +264,7 @@ def discover_weight_files(model_path: Path) -> list[Path]:
     if model_path.is_file():
         return [model_path]
 
-    index_names = ("model.safetensors.index.json", "pytorch_model.bin.index.json")
-    for name in index_names:
+    for name in ("model.safetensors.index.json", "pytorch_model.bin.index.json"):
         index_path = model_path / name
         if index_path.exists():
             return index_shards(index_path)
@@ -149,90 +281,94 @@ def discover_weight_files(model_path: Path) -> list[Path]:
     if files:
         return files
 
-    patterns = ("*.safetensors", "*.bin", "*.pt", "*.pth", "*.ckpt")
     discovered: list[Path] = []
-    for pattern in patterns:
+    for pattern in ("*.safetensors", "*.bin", "*.pt", "*.pth", "*.ckpt"):
         discovered.extend(sorted(model_path.glob(pattern)))
     if discovered:
         return discovered
-
     raise FileNotFoundError(f"No checkpoint weight files found in {model_path}")
 
 
-def normalize_name(name: str) -> str:
-    prefixes = ("_orig_mod.", "module.", "model.")
-    changed = True
-    while changed:
-        changed = False
-        for prefix in prefixes:
-            if name.startswith(prefix):
-                name = name[len(prefix) :]
-                changed = True
-    return name
-
-
-def is_float_tensor(tensor: torch.Tensor) -> bool:
-    return torch.is_floating_point(tensor)
-
-
-def is_linear_weight(name: str, tensor: torch.Tensor) -> bool:
-    if not is_float_tensor(tensor):
+def is_probably_linear_weight(name: str, tensor: torch.Tensor, prune_output_heads: bool) -> bool:
+    if not torch.is_floating_point(tensor) or tensor.ndim != 2:
         return False
-    if tensor.ndim != 2:
+    if not name.endswith(".weight"):
         return False
-
-    lname = name.lower()
-    excluded = (
-        "embed",
-        "embedding",
-        "embeddings",
-        "wte",
-        "wpe",
-        "position",
-        "rotary",
-        "rope",
-        "token_embedding",
-        "tok_emb",
-    )
-    if any(part in lname for part in excluded):
+    module_name = canonical_module_name(name[: -len(".weight")])
+    lowered = module_name.lower()
+    if any(part in lowered for part in EMBEDDING_NAME_PARTS):
         return False
-    if env("INCLUDE_LM_HEAD", "0") != "1" and (
-        "lm_head" in lname or "output_head" in lname or "classifier" in lname
-    ):
+    if not prune_output_heads and is_output_head_module(module_name):
         return False
-    return lname.endswith("weight") or ".weight" in lname or "weight" in lname
-
-
-def tensor_zero_stats(tensor: torch.Tensor) -> tuple[int, int]:
-    numel = int(tensor.numel())
-    if numel == 0:
-        return 0, 0
-    zeros = int(numel - torch.count_nonzero(tensor).item())
-    return zeros, numel
-
-
-def add_stats(total: dict[str, int], zeros: int, numel: int) -> None:
-    total["zero"] += zeros
-    total["total"] += numel
-
-
-def ratio(stats: dict[str, int]) -> float | None:
-    if stats["total"] == 0:
-        return None
-    return stats["zero"] / stats["total"]
+    return True
 
 
 def load_state_dicts(weight_files: list[Path]):
     for path in weight_files:
-        suffix = path.suffix.lower()
-        if suffix == ".safetensors":
-            state_dict = load_safetensors(path)
+        if path.suffix.lower() == ".safetensors":
+            yield path, load_safetensors(path)
         else:
-            state_dict = extract_state_dict(torch_load(path), path)
-        yield path, state_dict
+            yield path, extract_state_dict(torch_load(path), path)
 
 
-def null_metrics(summary_output: str | None = None) -> dict[str, Any]:
+def current_linear_sparsity_summary_from_state_dict(
+    target_sparsity: float,
+    method: str,
+    prune_output_heads: bool,
+) -> tuple[dict[str, Any], list[Path]]:
+    load_path = MODEL_PATH if MODEL_PATH.is_dir() else MODEL_PATH.parent
+    weight_files = discover_weight_files(MODEL_PATH if MODEL_PATH.is_file() else load_path)
+    whole_parameters: list[tuple[str, torch.Tensor]] = []
+    linear_parameters: list[tuple[str, torch.Tensor]] = []
+    selected_linear_tensors: list[dict[str, Any]] = []
+
+    for _source, state_dict in load_state_dicts(weight_files):
+        for raw_name, tensor in state_dict.items():
+            if not torch.is_tensor(tensor) or not torch.is_floating_point(tensor):
+                continue
+            name = canonical_module_name(raw_name)
+            # State dict fallback cannot distinguish parameters from buffers perfectly, so ignore
+            # common non-parameter masks/bias buffers by only counting named weights/biases.
+            if name.endswith(".weight") or name.endswith(".bias"):
+                whole_parameters.append((name, tensor))
+            if is_probably_linear_weight(name, tensor, prune_output_heads=prune_output_heads):
+                linear_parameters.append((name, tensor))
+                zeros = count_zeros(tensor)
+                numel = int(tensor.numel())
+                selected_linear_tensors.append(
+                    {
+                        "name": name[: -len(".weight")],
+                        "shape": list(tensor.shape),
+                        "numel": numel,
+                        "zeros": zeros,
+                        "sparsity": zeros / numel if numel else 0.0,
+                    }
+                )
+        del state_dict
+
+    target_stats = parameter_sparsity(linear_parameters)
+    whole_stats = parameter_sparsity(whole_parameters)
+    return (
+        {
+            "prune_scope": "linear_weights",
+            "prune_method": method,
+            "target_sparsity": float(target_sparsity),
+            "prune_output_heads": bool(prune_output_heads),
+            "global_pruning": False,
+            "regrowth": False,
+            "targeted_linear_parameters": int(target_stats["numel"]),
+            "targeted_linear_zeros": int(target_stats["zeros"]),
+            "targeted_linear_sparsity_actual": float(target_stats["sparsity"]),
+            "whole_model_parameters": int(whole_stats["numel"]),
+            "whole_model_zeros": int(whole_stats["zeros"]),
+            "whole_model_sparsity_actual": float(whole_stats["sparsity"]),
+            "selected_linear_tensors": selected_linear_tensors,
+        },
+        weight_files,
+    )
+
+
+def metric_block(summary_output: str | None = None) -> dict[str, Any]:
     return {
         "json": None,
         "rows": None,
@@ -240,128 +376,138 @@ def null_metrics(summary_output: str | None = None) -> dict[str, Any]:
         "em1": None,
         "em5": None,
         "difficulty": {
-            "easy": {"rows": None, "scored_rows": None, "em1": None, "em5": None},
-            "medium": {"rows": None, "scored_rows": None, "em1": None, "em5": None},
-            "hard": {"rows": None, "scored_rows": None, "em1": None, "em5": None},
+            label: {"rows": None, "scored_rows": None, "em1": None, "em5": None}
+            for label in ("easy", "medium", "hard")
         },
         "summary_output": summary_output,
         "predictions_output": None,
     }
 
 
-def make_report() -> dict[str, Any]:
-    weight_files = discover_weight_files(MODEL_PATH)
-    whole = {"zero": 0, "total": 0}
-    linear = {"zero": 0, "total": 0}
-    tensor_counts = {
-        "weight_files": len(weight_files),
-        "float_tensors": 0,
-        "linear_weight_tensors": 0,
+def flat_metric_fields(prefix: str, metrics: dict[str, Any] | None) -> dict[str, Any]:
+    metrics = metrics or {}
+    difficulty = metrics.get("difficulty") or {}
+    fields = {
+        f"{prefix}_em1_overall": metrics.get("em1"),
+        f"{prefix}_em5_overall": metrics.get("em5"),
+        f"{prefix}_count_total": metrics.get("rows"),
+        f"{prefix}_scored_rows": metrics.get("scored_rows"),
     }
+    for label in ("easy", "medium", "hard"):
+        block = difficulty.get(label) or {}
+        fields[f"{prefix}_em1_{label}"] = block.get("em1")
+        fields[f"{prefix}_em5_{label}"] = block.get("em5")
+        fields[f"{prefix}_count_{label}"] = block.get("rows")
+    return fields
+
+
+def make_payload() -> dict[str, Any]:
+    pruning_method = env("PRUNING_METHOD", "magnitude") or "magnitude"
+    method_label = env("METHOD_LABEL", pruning_method)
+    prune_output_heads = env_bool("PRUNE_OUTPUT_HEADS", False)
+    target_sparsity_env = as_float(env("TARGET_SPARSITY"))
     skipped: list[dict[str, Any]] = []
+    try:
+        weight_files = discover_weight_files(MODEL_PATH if MODEL_PATH.is_file() else MODEL_PATH)
+    except Exception:
+        weight_files = []
 
-    for source, state_dict in load_state_dicts(weight_files):
-        for raw_name, tensor in state_dict.items():
-            if not torch.is_tensor(tensor) or not is_float_tensor(tensor):
-                continue
-            name = normalize_name(raw_name)
-            zeros, numel = tensor_zero_stats(tensor.detach().cpu())
-            add_stats(whole, zeros, numel)
-            tensor_counts["float_tensors"] += 1
-            if is_linear_weight(name, tensor):
-                add_stats(linear, zeros, numel)
-                tensor_counts["linear_weight_tensors"] += 1
-        del state_dict
-
-    linear_sparsity = ratio(linear)
-    whole_sparsity = ratio(whole)
-    if linear_sparsity is None:
+    try:
+        model = load_model_for_measurement()
+        provisional_target = target_sparsity_env if target_sparsity_env is not None else 0.0
+        pruning_config = current_linear_sparsity_summary_from_model(
+            model,
+            target_sparsity=provisional_target,
+            method=pruning_method,
+            prune_output_heads=prune_output_heads,
+        )
+        measurement_source = "model_modules"
+    except Exception as exc:
+        provisional_target = target_sparsity_env if target_sparsity_env is not None else 0.0
+        pruning_config, fallback_weight_files = current_linear_sparsity_summary_from_state_dict(
+            target_sparsity=provisional_target,
+            method=pruning_method,
+            prune_output_heads=prune_output_heads,
+        )
+        weight_files = fallback_weight_files
+        measurement_source = "state_dict_fallback"
         skipped.append(
             {
                 "checkpoint_path": str(MODEL_PATH),
-                "reason": "No 2D linear weight tensors found by the default heuristic",
+                "reason": f"Model module loading failed; used state_dict fallback: {exc}",
             }
         )
 
-    target_sparsity = parse_float_or_none(env("TARGET_SPARSITY"))
-    if target_sparsity is None:
-        target_sparsity = linear_sparsity
+    if target_sparsity_env is None:
+        pruning_config["target_sparsity"] = pruning_config["targeted_linear_sparsity_actual"]
 
-    run_label = env("RUN_LABEL", MODEL_PATH.name)
-    pruning_method = env("PRUNING_METHOD", "unknown")
-    method_label = env("METHOD_LABEL", pruning_method)
-    output_summary = str(OUTPUT_JSON)
+    if int(pruning_config["targeted_linear_parameters"]) == 0:
+        skipped.append(
+            {
+                "checkpoint_path": str(MODEL_PATH),
+                "reason": "No prunable Linear weights found",
+            }
+        )
 
+    training_metrics = metric_block(summary_output=str(OUTPUT_JSON))
+    benchmark_metrics = metric_block(summary_output=str(OUTPUT_JSON))
+    model_training = env("MODEL_TRAINING", "decoder_slm")
     row = {
         "result_block": env("RESULT_BLOCK", "decoder_model_sparsity_scan"),
-        "model_training": env("MODEL_TRAINING", "decoder_slm"),
-        "run_label": run_label,
+        "model_training": model_training,
+        "run_label": env("RUN_LABEL", MODEL_PATH.name),
         "model_family": "decoder_only",
         "pruning_mode": env("PRUNING_MODE", "measured"),
         "pruning_method": pruning_method,
         "method_label": method_label,
-        "target_sparsity": target_sparsity,
-        "targeted_linear_sparsity_actual": linear_sparsity,
-        "whole_model_sparsity_actual": whole_sparsity,
-        "seed": parse_seed(env("SEED")),
+        "target_sparsity": as_float(pruning_config["target_sparsity"]),
+        "targeted_linear_sparsity_actual": as_float(
+            pruning_config["targeted_linear_sparsity_actual"]
+        ),
+        "whole_model_sparsity_actual": as_float(pruning_config["whole_model_sparsity_actual"]),
+        "seed": as_int(env("SEED")),
         "checkpoint_path": str(MODEL_PATH),
         "mask_path": env("MASK_PATH"),
-        "training_metrics": null_metrics(summary_output=output_summary),
-        "benchmark_metrics": null_metrics(summary_output=output_summary),
-        "training_em1_overall": None,
-        "training_em5_overall": None,
-        "training_count_total": None,
-        "training_scored_rows": None,
-        "training_em1_easy": None,
-        "training_em5_easy": None,
-        "training_count_easy": None,
-        "training_em1_medium": None,
-        "training_em5_medium": None,
-        "training_count_medium": None,
-        "training_em1_hard": None,
-        "training_em5_hard": None,
-        "training_count_hard": None,
-        "benchmark_em1_overall": None,
-        "benchmark_em5_overall": None,
-        "benchmark_count_total": None,
-        "benchmark_scored_rows": None,
-        "benchmark_em1_easy": None,
-        "benchmark_em5_easy": None,
-        "benchmark_count_easy": None,
-        "benchmark_em1_medium": None,
-        "benchmark_em5_medium": None,
-        "benchmark_count_medium": None,
-        "benchmark_em1_hard": None,
-        "benchmark_em5_hard": None,
-        "benchmark_count_hard": None,
+        "training_metrics": training_metrics,
+        "benchmark_metrics": benchmark_metrics,
+        **flat_metric_fields("training", training_metrics),
+        **flat_metric_fields("benchmark", benchmark_metrics),
+        "em1_retention_overall": None,
+        "em5_retention_overall": None,
         "training_config": None,
         "pruning_config": {
-            "prune_scope": "linear_weights",
-            "linear_weight_zero_params": linear["zero"],
-            "linear_weight_total_params": linear["total"],
-            "whole_model_zero_params": whole["zero"],
-            "whole_model_total_float_params": whole["total"],
-            "include_lm_head": env("INCLUDE_LM_HEAD", "0") == "1",
-            **tensor_counts,
+            **pruning_config,
+            "measurement_source": measurement_source,
         },
         "notes": env(
             "NOTES",
-            "Generated by generate_sparsity_results.sh; EM metrics are null because this script only measures checkpoint sparsity.",
+            "Generated by generate_sparsity_results.sh following the encoder-only sparsity report schema; EM metrics are null because this script only measures checkpoint sparsity.",
         ),
     }
 
     return {
-        "report_type": env("REPORT_TYPE", "decoder_sparsity_results"),
+        "report_type": env("REPORT_TYPE", "scenic_sparsity_revision_combined_results"),
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "experiment": {
             "base_model": str(MODEL_PATH),
-            "model_family": "decoder_only",
+            "sft_epochs": as_int(env("SFT_EPOCHS")),
+            "model_trainings": [model_training],
+            "original_one_shot_expected_rows_per_training": 1,
+            "original_one_shot_expected_rows_total": 1,
+            "dense_baseline_expected_rows_total": 0,
+            "progressive_expected_rows_per_training": 0,
+            "progressive_expected_rows_total": 0,
             "expected_rows_total": 1,
-            "prune_scope": "linear_weights",
-            "include_lm_head": env("INCLUDE_LM_HEAD", "0") == "1",
+            "gradual_prune_method": pruning_method,
+            "recovery_epochs_per_stage": as_int(env("RECOVERY_EPOCHS_PER_STAGE")),
+            "final_recovery_epochs": as_int(env("FINAL_RECOVERY_EPOCHS")),
+            "gradient_calibration_batch_size": as_int(env("GRADIENT_CALIBRATION_BATCH_SIZE")),
+            "gradient_calibration_batches": as_int(env("GRADIENT_CALIBRATION_BATCHES")),
         },
         "source_files": {
-            "model_path": str(MODEL_PATH),
+            "original_one_shot_summary": None,
+            "linear_sparsity_retune_summaries": [],
+            "decoder_model_path": str(MODEL_PATH),
             "weight_files": [str(path) for path in weight_files],
         },
         "actual_rows_total": 1,
@@ -370,8 +516,8 @@ def make_report() -> dict[str, Any]:
     }
 
 
-report = make_report()
+payload = make_payload()
 OUTPUT_JSON.parent.mkdir(parents=True, exist_ok=True)
-OUTPUT_JSON.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+OUTPUT_JSON.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 print(f"Wrote {OUTPUT_JSON}")
 PY

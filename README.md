@@ -144,7 +144,9 @@ MODEL_TRAINING=regular_sft RUN_LABEL=magnitude_0p5 TARGET_SPARSITY=0.5 \
 ```
 
 The script measures checkpoint sparsity only. Training and benchmark EM fields are emitted as
-`null` unless they are produced by a separate evaluation workflow.
+`null` unless they are produced by a separate evaluation workflow. The sparsity calculation follows
+the encoder-only implementation: it measures prunable `nn.Linear` weights, excludes output heads by
+default, and records encoder-style `pruning_config` fields.
 
 ## Run Generation
 
