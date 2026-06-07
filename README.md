@@ -102,7 +102,7 @@ Run both 5-epoch SCENIC training jobs from a base decoder checkpoint:
 ```bash
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 NPROC_PER_NODE=8 \
-MODEL_KIND=custom \
+MODEL_KIND=hf \
 bash run_scenic_further_training_from_base.sh /PATH/TO/MY/BASE_DECODER_SLM
 ```
 
@@ -118,9 +118,11 @@ Defaults:
 - contrastive triplet SFT: 5 epochs on `data/scenic/SCENIC_full_anchor_positive_negative.json`
 - regular SFT: 5 epochs on `data/scenic/SCENIC_full_training_dataset.json`
 - regular SFT starts from the base model. To chain regular SFT after contrastive SFT, set `REGULAR_START=contrastive`.
-- `MODEL_KIND=custom` forces the local custom decoder loader. This is useful when your local folder has
-  `tokenizer.json`/`tokenizer_config.json` from `PreTrainedTokenizerFast` and a `config.json` that would
-  otherwise make Transformers try a class such as `LlamaForCausalLM`.
+- `MODEL_KIND=hf` is the right setting for `Decoder-Chinese-SLM` checkpoints. They are local
+  Hugging Face-style Llama causal LM checkpoints, even after repairing the tokenizer with
+  `PreTrainedTokenizerFast`.
+- `LOCAL_ONLY=1` is the default, so model/tokenizer loading uses local files only.
+- `MODEL_KIND=custom` is only for the older `model.pt` custom `DecoderOnlyTransformer` format.
 
 Planner check without training:
 
@@ -198,7 +200,7 @@ run progressive magnitude pruning with recovery, and write the final JSON:
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 \
 NPROC_PER_NODE=8 \
 SPARSITY_GPU_IDS=0,1,2,3,4,5,6,7 \
-MODEL_KIND=custom \
+MODEL_KIND=hf \
 bash run_linear_sparsity_revision_from_base.sh /PATH/TO/MY/DECODER_SLM_CHECKPOINT
 ```
 

@@ -22,6 +22,7 @@ Optional environment labels:
   PRUNE_OUTPUT_HEADS    Include lm_head/classifier/output heads when set to 1.
   REPORT_TYPE           Top-level report type. Default follows encoder-only JSON.
   PYTHON_BIN            Python executable. Default: python
+  LOCAL_ONLY            Force local/offline Hugging Face loading. Default: 1
 
 Examples:
   conda activate decoder-only-runner
@@ -48,6 +49,12 @@ if [[ -z "${PYTHON_BIN:-}" && -n "${CONDA_PREFIX:-}" && -x "$CONDA_PREFIX/bin/py
   PYTHON_BIN="$CONDA_PREFIX/bin/python"
 else
   PYTHON_BIN="${PYTHON_BIN:-python}"
+fi
+LOCAL_ONLY="${LOCAL_ONLY:-1}"
+
+if [[ "$LOCAL_ONLY" == "1" ]]; then
+  export HF_HUB_OFFLINE=1
+  export TRANSFORMERS_OFFLINE=1
 fi
 
 "$PYTHON_BIN" - "$MODEL_PATH" "$OUTPUT_JSON" <<'PY'

@@ -21,7 +21,8 @@ Useful overrides:
   GRADIENT_ACCUMULATION_STEPS=16
   LEARNING_RATE=2e-5
   MIXED_PRECISION=bf16
-  MODEL_KIND=custom      # auto, custom, or hf
+  MODEL_KIND=hf          # auto, hf, or custom
+  LOCAL_ONLY=1
   DRY_RUN=1
 USAGE
 }
@@ -63,10 +64,15 @@ else
   PYTHON_BIN="${PYTHON_BIN:-python}"
 fi
 MODEL_KIND="${MODEL_KIND:-auto}"
+LOCAL_ONLY="${LOCAL_ONLY:-1}"
 
 export CUDA_VISIBLE_DEVICES
 export NPROC_PER_NODE
 export DECODER_ONLY_MODEL_KIND="$MODEL_KIND"
+if [[ "$LOCAL_ONLY" == "1" ]]; then
+  export HF_HUB_OFFLINE=1
+  export TRANSFORMERS_OFFLINE=1
+fi
 
 require_path() {
   if [[ ! -e "$1" ]]; then
@@ -152,6 +158,7 @@ echo "Contrastive output: $CONTRASTIVE_OUTPUT/checkpoint-final"
 echo "Regular SFT output: $REGULAR_OUTPUT/checkpoint-final"
 echo "Regular SFT starts from: $REGULAR_START"
 echo "Model loader kind: $MODEL_KIND"
+echo "Local-only Hugging Face loading: $LOCAL_ONLY"
 
 if [[ "${DRY_RUN:-0}" == "1" ]]; then
   echo "Dry run; commands that would run:"

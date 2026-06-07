@@ -12,7 +12,8 @@ Usage:
 Optional:
   OUTPUT_ROOT=outputs/decoder_pruning_full_matrix
   OUTPUT_JSON=$OUTPUT_ROOT/all_sparsity_results.json
-  MODEL_KIND=custom
+  MODEL_KIND=hf
+  LOCAL_ONLY=1
   DRY_RUN=1
 
 This writes a decoder_pruning_full_matrix JSON with 20 planned rows:
@@ -47,11 +48,16 @@ else
   PYTHON_BIN="${PYTHON_BIN:-python}"
 fi
 MODEL_KIND="${MODEL_KIND:-auto}"
+LOCAL_ONLY="${LOCAL_ONLY:-1}"
 
 export CUDA_VISIBLE_DEVICES
 export NPROC_PER_NODE
 export SPARSITY_GPU_IDS
 export DECODER_ONLY_MODEL_KIND="$MODEL_KIND"
+if [[ "$LOCAL_ONLY" == "1" ]]; then
+  export HF_HUB_OFFLINE=1
+  export TRANSFORMERS_OFFLINE=1
+fi
 
 args=(
   -m decoder_only.full_matrix

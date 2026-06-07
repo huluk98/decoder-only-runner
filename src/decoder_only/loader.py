@@ -81,25 +81,35 @@ def _load_hf_model(model_path: Path, device: torch.device) -> tuple[str, Any, An
             "Install the environment from environment.yml or requirements.txt."
         ) from exc
 
+    trust_remote_code = os.environ.get("HF_TRUST_REMOTE_CODE", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+    }
     try:
         tokenizer = AutoTokenizer.from_pretrained(
             model_path,
             local_files_only=True,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
+            use_fast=True,
         )
         model = AutoModelForCausalLM.from_pretrained(
             model_path,
             local_files_only=True,
-            trust_remote_code=True,
+            trust_remote_code=trust_remote_code,
             torch_dtype="auto",
         )
     except Exception as exc:
         raise RuntimeError(
-            "The checkpoint was detected as a local Hugging Face causal LM, so Transformers "
-            "tried to instantiate the model class from config.json. If this is your custom "
-            "decoder-only checkpoint, set DECODER_ONLY_MODEL_KIND=custom or keep the custom "
-            "config fields vocab_size, block_size, n_layer, n_head, and n_embd in config.json."
+            "The checkpoint was detected as a local Hugging Face causal LM and was loaded with "
+            "local_files_only=True. For Decoder-Chinese-SLM checkpoints, keep MODEL_KIND=hf or "
+            "MODEL_KIND=auto and make sure config.json, model.safetensors/pytorch_model.bin, "
+            "tokenizer.json, tokenizer_config.json, and special_tokens_map.json are all in the "
+            "same local folder. If this is the older custom model.pt format instead, set "
+            "MODEL_KIND=custom."
         ) from exc
+    if getattr(tokenizer, "pad_token_id", None) is None and getattr(tokenizer, "eos_token", None):
+        tokenizer.pad_token = tokenizer.eos_token
     model.to(device)
     model.eval()
     return "hf", model, tokenizer
